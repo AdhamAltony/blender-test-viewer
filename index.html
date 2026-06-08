@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ImpressIV — 3D Model Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #111; }
+    #app { width: 100vw; height: 100vh; position: relative; }
+    canvas { display: block; }
+
+    .panel {
+      position: absolute; z-index: 10;
+      color: #ddd; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: rgba(17,17,17,0.78); backdrop-filter: blur(6px);
+      border: 1px solid #2a2a2a; border-radius: 10px;
+      padding: 14px 16px; line-height: 1.5;
+    }
+
+    /* Top-left: title + file name */
+    #info { top: 16px; left: 16px; max-width: 320px; font-size: 13px; }
+    #info h1 { font-size: 14px; font-weight: 700; margin-bottom: 4px; color: #fff; }
+    #info .file { color: #8ad; font-size: 12px; word-break: break-all; }
+    #info .hint { color: #888; font-size: 11px; margin-top: 8px; }
+
+    /* Bottom-center: open hint */
+    #drophint { bottom: 16px; left: 50%; transform: translateX(-50%); font-size: 12px; color: #999; text-align: center; }
+    #drophint b { color: #ccc; }
+
+    /* Loading + drag overlays */
+    #loading {
+      position: absolute; inset: 0; z-index: 20; display: none;
+      align-items: center; justify-content: center; flex-direction: column; gap: 14px;
+      background: rgba(17,17,17,0.7); color: #fff;
+      font-family: -apple-system, sans-serif; font-size: 15px;
+    }
+    #loading.show { display: flex; }
+    .spinner {
+      width: 38px; height: 38px; border: 3px solid #333; border-top-color: #2563eb;
+      border-radius: 50%; animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #progress { font-size: 13px; color: #9bd; }
+
+    #dragmask {
+      position: absolute; inset: 0; z-index: 30; display: none;
+      align-items: center; justify-content: center;
+      background: rgba(37,99,235,0.18); border: 4px dashed #2563eb;
+      color: #fff; font-family: -apple-system, sans-serif; font-size: 22px; font-weight: 700;
+      pointer-events: none;
+    }
+    #dragmask.show { display: flex; }
+
+    #error {
+      position: absolute; bottom: 16px; left: 16px; right: 16px; z-index: 25; display: none;
+      background: #3a1212; border: 1px solid #7a2222; color: #ffcaca;
+      font-family: -apple-system, sans-serif; font-size: 13px; padding: 12px 14px; border-radius: 8px;
+      max-width: 520px;
+    }
+    #error.show { display: block; }
+
+    input[type="file"] { display: none; }
+
+    /* lil-gui sits top-right; give it a touch more room */
+    .lil-gui { --width: 300px; z-index: 12; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="info" class="panel">
+      <h1>ImpressIV — 3D Model Viewer</h1>
+      <div class="file" id="filename">Loading default model…</div>
+      <div class="hint">
+        Orbit: left-drag &nbsp;·&nbsp; Pan: right-drag &nbsp;·&nbsp; Zoom: scroll<br />
+        Settings panel is in the top-right corner.
+      </div>
+    </div>
+
+    <input type="file" id="fileinput" accept=".glb,.gltf" />
+
+    <div id="drophint" class="panel">
+      Drag &amp; drop a <b>.glb</b> file anywhere to view it
+    </div>
+
+    <div id="loading">
+      <div class="spinner"></div>
+      <div>Loading model…</div>
+      <div id="progress"></div>
+    </div>
+
+    <div id="dragmask">Drop your .glb here</div>
+    <div id="error"></div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.183.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+    import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
+    import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
+    import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
+    import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+    import { ViewHelper } from "three/addons/helpers/ViewHelper.js";
+    import { GUI } from "three/addons/libs/lil-gui.module.min.js";
+
+    const DEFAULT_MODEL = "models/Hall_1_Cleaned_Test_2.glb";
+    const STORE_KEY = "impressiv-viewer-settings-v1";
+
+    const el = (id) => document.getElementById(id);
+    const app = el("app");
+
+    // ---------- Settings (persisted) ----------
+    const defaults = {
+      // Model / view
+      autoRotate: false,
+      autoRotateSpeed: 1.0,
+      // Ambient light
+      ambientOn: true,
+      ambientIntensity: 0.5,
+      ambientColor: "#ffffff",
+      // Sun (directional) light
+      sunOn: true,
+      sunIntensity: 1.5,
+      sunColor: "#ffffff",
+      sunX: 1, sunY: 2, sunZ: 1,
+      // Environment (image-based lighting)
+      envOn: true,
+      envIntensity: 1.0,
+      // Scene
+      background: "Dark",          // Dark | Light | Custom | Transparent
+      bgColor: "#111111",
+      gridVisible: true,
+      wireframe: false,
+      // Render
+      toneMapping: "ACES Filmic",
+      exposure: 1.0,
+    };
+    let params = Object.assign({}, defaults);
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
+      params = Object.assign(params, saved);
+    } catch (_) {}
+    const saveSettings = () => {
+      try { localStorage.setItem(STORE_KEY, JSON.stringify(params)); } catch (_) {}
+    };
+
+    const TONE = {
+      "None": THREE.NoToneMapping,
+      "Linear": THREE.LinearToneMapping,
+      "Reinhard": THREE.ReinhardToneMapping,
+      "Cineon": THREE.CineonToneMapping,
+      "ACES Filmic": THREE.ACESFilmicToneMapping,
+      "AgX": THREE.AgXToneMapping,
+      "Neutral": THREE.NeutralToneMapping,
+    };
+
+    // ---------- Renderer / scene / camera ----------
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.autoClear = false;
+    app.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 500000);
+    camera.position.set(0, 500, 1000);
+
+    // Studio environment lighting (generated, no external files)
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const envTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+    const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambient);
+    const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+    scene.add(sun);
+
+    const grid = new THREE.GridHelper(10000, 200, 0x444444, 0x2a2a2a);
+    grid.material.transparent = true;
+    grid.material.opacity = 0.6;
+    scene.add(grid);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+
+    const viewHelper = new ViewHelper(camera, renderer.domElement);
+
+    // ---------- Loaders ----------
+    const draco = new DRACOLoader().setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.183.0/examples/jsm/libs/draco/");
+    const ktx2 = new KTX2Loader().setTranscoderPath("https://cdn.jsdelivr.net/npm/three@0.183.0/examples/jsm/libs/basis/").detectSupport(renderer);
+    const loader = new GLTFLoader();
+    loader.setDRACOLoader(draco);
+    loader.setKTX2Loader(ktx2);
+    loader.setMeshoptDecoder(MeshoptDecoder);
+
+    let current = null;
+    let lastFrame = null;
+
+    // ---------- Apply settings to the scene ----------
+    function applyLights() {
+      ambient.visible = params.ambientOn;
+      ambient.intensity = params.ambientIntensity;
+      ambient.color.set(params.ambientColor);
+
+      sun.visible = params.sunOn;
+      sun.intensity = params.sunIntensity;
+      sun.color.set(params.sunColor);
+      sun.position.set(params.sunX, params.sunY, params.sunZ);
+    }
+    function applyEnv() {
+      scene.environment = params.envOn ? envTexture : null;
+      applyMaterials();
+    }
+    function applyBackground() {
+      if (params.background === "Transparent") { scene.background = null; }
+      else if (params.background === "Light") { scene.background = new THREE.Color(0xcfd4da); }
+      else if (params.background === "Custom") { scene.background = new THREE.Color(params.bgColor); }
+      else { scene.background = new THREE.Color(0x111111); } // Dark
+    }
+    function applyToneMapping() {
+      renderer.toneMapping = TONE[params.toneMapping] ?? THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = params.exposure;
+      applyMaterials(); // materials must recompile when tone mapping changes
+    }
+    function applyMaterials() {
+      if (!current) return;
+      current.traverse((o) => {
+        if (o.isMesh && o.material) {
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          mats.forEach((m) => {
+            if ("wireframe" in m) m.wireframe = params.wireframe;
+            if ("envMapIntensity" in m) m.envMapIntensity = params.envIntensity;
+            m.needsUpdate = true;
+          });
+        }
+      });
+    }
+    function applyGrid() { grid.visible = params.gridVisible; }
+    function applyAutoRotate() {
+      controls.autoRotate = params.autoRotate;
+      controls.autoRotateSpeed = params.autoRotateSpeed;
+    }
+    function applyAll() {
+      applyLights(); applyEnv(); applyBackground(); applyToneMapping();
+      applyGrid(); applyAutoRotate(); applyMaterials();
+    }
+
+    // ---------- Loading ----------
+    function setLoading(on, text) {
+      el("loading").classList.toggle("show", on);
+      el("progress").textContent = text || "";
+    }
+    function showError(msg) {
+      const e = el("error");
+      e.textContent = "⚠ " + msg;
+      e.classList.add("show");
+      setTimeout(() => e.classList.remove("show"), 8000);
+    }
+
+    function frameObject(object) {
+      const box = new THREE.Box3().setFromObject(object);
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      object.position.sub(center);
+
+      const maxDim = Math.max(size.x, size.y, size.z) || 1;
+      const fov = camera.fov * (Math.PI / 180);
+      const dist = (maxDim / 2) / Math.tan(fov / 2) * 1.5;
+
+      camera.position.set(dist * 0.6, dist * 0.4, dist * 0.6);
+      camera.near = maxDim * 0.001;
+      camera.far = maxDim * 10;
+      camera.updateProjectionMatrix();
+      controls.target.set(0, 0, 0);
+      controls.update();
+      lastFrame = { pos: camera.position.clone(), near: camera.near, far: camera.far };
+    }
+
+    function clearCurrent() {
+      if (!current) return;
+      scene.remove(current);
+      current.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) {
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          mats.forEach((m) => m.dispose && m.dispose());
+        }
+      });
+      current = null;
+    }
+
+    function onLoaded(gltf, label) {
+      clearCurrent();
+      current = gltf.scene || gltf.scenes[0];
+      scene.add(current);
+      frameObject(current);
+      applyMaterials();
+      el("filename").textContent = label;
+      setLoading(false);
+    }
+
+    function loadFromURL(url, label) {
+      setLoading(true, "");
+      loader.load(url, (gltf) => onLoaded(gltf, label),
+        (xhr) => {
+          if (xhr.lengthComputable) setLoading(true, Math.round((xhr.loaded / xhr.total) * 100) + "%");
+          else setLoading(true, (xhr.loaded / 1048576).toFixed(1) + " MB");
+        },
+        (err) => { setLoading(false); showError("Could not load this model. " + (err && err.message ? err.message : "")); console.error(err); });
+    }
+
+    function loadFromFile(file) {
+      const url = URL.createObjectURL(file);
+      setLoading(true, "");
+      loader.load(url, (gltf) => { onLoaded(gltf, file.name); URL.revokeObjectURL(url); },
+        (xhr) => setLoading(true, (xhr.loaded / 1048576).toFixed(1) + " MB"),
+        (err) => { setLoading(false); URL.revokeObjectURL(url); showError("Could not load \"" + file.name + "\". Make sure it is a valid .glb / .gltf export."); console.error(err); });
+    }
+
+    // ---------- Actions ----------
+    const actions = {
+      openModel: () => el("fileinput").click(),
+      resetView: () => {
+        if (current && lastFrame) {
+          camera.position.copy(lastFrame.pos);
+          camera.near = lastFrame.near; camera.far = lastFrame.far;
+          camera.updateProjectionMatrix();
+          controls.target.set(0, 0, 0); controls.update();
+        }
+      },
+      resetSettings: () => {
+        try { localStorage.removeItem(STORE_KEY); } catch (_) {}
+        location.reload();
+      },
+    };
+
+    // ---------- GUI ----------
+    const gui = new GUI({ title: "⚙ Settings" });
+    const persist = () => saveSettings();
+
+    const fModel = gui.addFolder("Model & View");
+    fModel.add(actions, "openModel").name("📂 Open a model…");
+    fModel.add(actions, "resetView").name("↺ Reset camera");
+    fModel.add(params, "autoRotate").name("Auto-rotate").onChange(() => { applyAutoRotate(); persist(); });
+    fModel.add(params, "autoRotateSpeed", 0.1, 8, 0.1).name("Rotate speed").onChange(() => { applyAutoRotate(); persist(); });
+
+    const fAmbient = gui.addFolder("Ambient Light");
+    fAmbient.add(params, "ambientOn").name("Enabled").onChange(() => { applyLights(); persist(); });
+    fAmbient.add(params, "ambientIntensity", 0, 5, 0.05).name("Intensity").onChange(() => { applyLights(); persist(); });
+    fAmbient.addColor(params, "ambientColor").name("Color").onChange(() => { applyLights(); persist(); });
+
+    const fSun = gui.addFolder("Sun / Directional Light");
+    fSun.add(params, "sunOn").name("Enabled").onChange(() => { applyLights(); persist(); });
+    fSun.add(params, "sunIntensity", 0, 10, 0.05).name("Intensity").onChange(() => { applyLights(); persist(); });
+    fSun.addColor(params, "sunColor").name("Color").onChange(() => { applyLights(); persist(); });
+    fSun.add(params, "sunX", -10, 10, 0.1).name("Direction X").onChange(() => { applyLights(); persist(); });
+    fSun.add(params, "sunY", -10, 10, 0.1).name("Direction Y").onChange(() => { applyLights(); persist(); });
+    fSun.add(params, "sunZ", -10, 10, 0.1).name("Direction Z").onChange(() => { applyLights(); persist(); });
+
+    const fEnv = gui.addFolder("Environment Light");
+    fEnv.add(params, "envOn").name("Enabled (reflections)").onChange(() => { applyEnv(); persist(); });
+    fEnv.add(params, "envIntensity", 0, 4, 0.05).name("Strength").onChange(() => { applyMaterials(); persist(); });
+
+    const fScene = gui.addFolder("Scene");
+    fScene.add(params, "background", ["Dark", "Light", "Custom", "Transparent"]).name("Background").onChange(() => { applyBackground(); persist(); });
+    fScene.addColor(params, "bgColor").name("Custom color").onChange(() => { if (params.background === "Custom") applyBackground(); persist(); });
+    fScene.add(params, "gridVisible").name("Show grid").onChange(() => { applyGrid(); persist(); });
+    fScene.add(params, "wireframe").name("Wireframe").onChange(() => { applyMaterials(); persist(); });
+
+    const fRender = gui.addFolder("Render Quality");
+    fRender.add(params, "toneMapping", Object.keys(TONE)).name("Tone mapping").onChange(() => { applyToneMapping(); persist(); });
+    fRender.add(params, "exposure", 0, 3, 0.01).name("Exposure").onChange(() => { renderer.toneMappingExposure = params.exposure; persist(); });
+
+    gui.add(actions, "resetSettings").name("⟲ Reset all settings");
+
+    // collapse the heavier folders by default to keep it tidy
+    fSun.close(); fEnv.close(); fRender.close();
+
+    // sync GUI widgets with any persisted values loaded at start
+    gui.controllersRecursive().forEach((c) => c.updateDisplay());
+
+    // ---------- File input ----------
+    el("fileinput").addEventListener("change", (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (f) loadFromFile(f);
+      e.target.value = "";
+    });
+
+    // ---------- Drag & drop ----------
+    const dragmask = el("dragmask");
+    let dragDepth = 0;
+    window.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; dragmask.classList.add("show"); });
+    window.addEventListener("dragover", (e) => e.preventDefault());
+    window.addEventListener("dragleave", (e) => { e.preventDefault(); dragDepth = Math.max(0, dragDepth - 1); if (dragDepth === 0) dragmask.classList.remove("show"); });
+    window.addEventListener("drop", (e) => {
+      e.preventDefault(); dragDepth = 0; dragmask.classList.remove("show");
+      const f = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (!f) return;
+      if (!/\.(glb|gltf)$/i.test(f.name)) { showError("Please drop a .glb or .gltf file."); return; }
+      loadFromFile(f);
+    });
+
+    // ---------- Resize ----------
+    window.addEventListener("resize", () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // ---------- Render loop ----------
+    const clock = new THREE.Clock();
+    function animate() {
+      requestAnimationFrame(animate);
+      const delta = clock.getDelta();
+      if (viewHelper.animating) viewHelper.update(delta);
+      controls.update();
+      renderer.clear();
+      renderer.render(scene, camera);
+      viewHelper.render(renderer);
+    }
+
+    // ---------- Boot ----------
+    applyAll();
+    animate();
+    loadFromURL(DEFAULT_MODEL, DEFAULT_MODEL.split("/").pop());
+  </script>
+</body>
+</html>
