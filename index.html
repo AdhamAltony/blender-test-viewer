@@ -162,8 +162,8 @@
     let   dragState   = null;   // { targetObj, startX, startY, active }
     let   dragMode    = "camera"; // "camera" | "horizontal" | "vertical"
 
-    const bulbScale   = () => Math.max(sceneDim * 0.028, 0.5);
-    const targetScale = () => Math.max(sceneDim * 0.020, 0.4);
+    const bulbScale   = () => Math.max(sceneDim * 0.010, 0.3);
+    const targetScale = () => Math.max(sceneDim * 0.007, 0.2);
 
     function getMouse(e) {
       const rect = renderer.domElement.getBoundingClientRect();
