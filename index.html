@@ -161,6 +161,7 @@
 
     const tc = new TransformControls(camera, renderer.domElement);
     tc.setMode("translate");
+    tc.size = 1.4;  // larger gizmo, easier to grab in big scenes
     scene.add(tc);
 
     tc.addEventListener("dragging-changed", (e) => {
@@ -272,7 +273,7 @@
       if (entry) {
         const attachTo = (role === "target" && entry.targetGroup) ? entry.targetGroup : entry.group;
         tc.attach(attachTo);
-        tc.visible = params.showLightGizmos;
+        tc.visible = true;  // always show arrows when a light is selected
       } else {
         tc.detach(); tc.visible = false;
       }
@@ -566,8 +567,8 @@
 
     // Move handles
     const moveA = {
-      moveLight:  () => { if (selectedLight) { tc.attach(selectedLight.group);       tc.visible = params.showLightGizmos; } },
-      moveTarget: () => { if (selectedLight?.targetGroup) { tc.attach(selectedLight.targetGroup); tc.visible = params.showLightGizmos; } },
+      moveLight:  () => { if (selectedLight) { tc.attach(selectedLight.group); tc.visible = true; } },
+      moveTarget: () => { if (selectedLight?.targetGroup) { tc.attach(selectedLight.targetGroup); tc.visible = true; } },
       resetLight:  () => { if (selectedLight) { selectedLight.group.position.set(0, sceneDim * 0.45, 0); saveLights(); } },
       resetTarget: () => { if (selectedLight?.targetGroup) { selectedLight.targetGroup.position.set(0, 0, 0); saveLights(); } },
     };
@@ -650,7 +651,7 @@
     const saved = loadSavedLights();
     if (saved?.length) restoreLights(saved);
     else               selectLight(spawnLight("Point", "#ffffff", 4));
-    tc.visible = params.showLightGizmos && selectedLight != null;
+    tc.visible = selectedLight != null;
     animate();
     loadFromURL(DEFAULT_MODEL, DEFAULT_MODEL.split("/").pop());
   </script>
