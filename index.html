@@ -100,7 +100,7 @@
       autoRotate: false, autoRotateSpeed: 1.0,
       ambientOn: true, ambientIntensity: 0.5, ambientColor: "#ffffff",
       sunOn: true, sunIntensity: 1.5, sunColor: "#ffffff", sunX: 1, sunY: 2, sunZ: 1,
-      envOn: true, envIntensity: 1.0,
+      envOn: true, envIntensity: 1.0, envPreset: "Studio",
       background: "Dark", bgColor: "#111111",
       gridVisible: true, wireframe: false,
       toneMapping: "ACES Filmic", exposure: 1.0,
@@ -128,8 +128,33 @@
     const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 500000);
     camera.position.set(0, 500, 1000);
 
-    const pmrem      = new THREE.PMREMGenerator(renderer);
-    const envTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+
+    function makeGradientEnv(stops) {
+      const W = 256, H = 128;
+      const canvas = document.createElement("canvas");
+      canvas.width = W; canvas.height = H;
+      const ctx  = canvas.getContext("2d");
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      stops.forEach(([t, c]) => grad.addColorStop(t, c));
+      ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H);
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.mapping = THREE.EquirectangularReflectionMapping;
+      const out = pmrem.fromEquirectangular(tex).texture;
+      tex.dispose();
+      return out;
+    }
+
+    const ENV_MAPS = {
+      "Studio":         pmrem.fromScene(new RoomEnvironment(), 0.04).texture,
+      "Outdoor Day":    makeGradientEnv([[0,"#1b4fa8"],[0.35,"#6ab4f5"],[0.52,"#e8c97a"],[1,"#c87840"]]),
+      "Sunset":         makeGradientEnv([[0,"#0d0520"],[0.3,"#7a1a08"],[0.5,"#d84800"],[0.65,"#f07820"],[1,"#f09840"]]),
+      "Overcast":       makeGradientEnv([[0,"#5a6068"],[0.5,"#7a8088"],[1,"#8a9098"]]),
+      "Indoor Neutral": makeGradientEnv([[0,"#5a4838"],[0.4,"#9a8068"],[1,"#b09878"]]),
+      "Minimal":        makeGradientEnv([[0,"#383838"],[1,"#484848"]]),
+    };
+    const ENV_PRESET_NAMES = Object.keys(ENV_MAPS);
 
     const ambient = new THREE.AmbientLight(0xffffff, 0.5); scene.add(ambient);
     const sun     = new THREE.DirectionalLight(0xffffff, 1.5); scene.add(sun);
@@ -403,7 +428,7 @@
       sun.visible = params.sunOn; sun.intensity = params.sunIntensity; sun.color.set(params.sunColor);
       sun.position.set(params.sunX, params.sunY, params.sunZ);
     }
-    function applyEnv()  { scene.environment = params.envOn ? envTexture : null; applyMaterials(); }
+    function applyEnv()  { scene.environment = params.envOn ? (ENV_MAPS[params.envPreset] ?? ENV_MAPS["Studio"]) : null; applyMaterials(); }
     function applyBackground() {
       if      (params.background === "Transparent") scene.background = null;
       else if (params.background === "Light")       scene.background = new THREE.Color(0xcfd4da);
@@ -527,6 +552,7 @@
     // Environment
     const fEnv = gui.addFolder("Environment (IBL)");
     fEnv.add(params, "envOn").name("Enabled").onChange(() => { applyEnv(); saveSettings(); });
+    fEnv.add(params, "envPreset", ENV_PRESET_NAMES).name("Preset").onChange(() => { applyEnv(); saveSettings(); });
     fEnv.add(params, "envIntensity", 0, 4, 0.05).name("Strength").onChange(() => { applyMaterials(); saveSettings(); });
 
     // ── Positional Lights ─────────────────────────────────────────────────────
