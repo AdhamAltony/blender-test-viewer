@@ -105,6 +105,7 @@
   <script type="module">
     import * as THREE from "three";
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { TransformControls } from "three/addons/controls/TransformControls.js";
     import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
     import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
     import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
@@ -137,13 +138,19 @@
       envOn: true,
       envIntensity: 1.0,
       // Scene
-      background: "Dark",          // Dark | Light | Custom | Transparent
+      background: "Dark",
       bgColor: "#111111",
       gridVisible: true,
       wireframe: false,
       // Render
       toneMapping: "ACES Filmic",
       exposure: 1.0,
+      // Positional light
+      plEnabled: true,
+      plType: "Point",
+      plColor: "#ffffff",
+      plIntensity: 4,
+      plShowGizmo: true,
     };
     let params = Object.assign({}, defaults);
     try {
@@ -176,7 +183,7 @@
     const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 500000);
     camera.position.set(0, 500, 1000);
 
-    // Studio environment lighting (generated, no external files)
+    // Studio environment lighting
     const pmrem = new THREE.PMREMGenerator(renderer);
     const envTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
@@ -196,6 +203,87 @@
 
     const viewHelper = new ViewHelper(camera, renderer.domElement);
 
+    // ---------- Positional Light ----------
+    let sceneDim = 100; // updated when a model loads
+
+    // Group holds both the visual bulb and the light — moving the group moves both
+    const lightGroup = new THREE.Group();
+    lightGroup.position.set(0, 50, 0);
+    scene.add(lightGroup);
+
+    // Visual bulb mesh
+    const bulbMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1.0 });
+    const bulbMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 16), bulbMat);
+    lightGroup.add(bulbMesh);
+
+    // Equatorial ring so the position is obvious
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
+    const ringMesh = new THREE.Mesh(new THREE.TorusGeometry(1.35, 0.09, 8, 32), ringMat);
+    ringMesh.rotation.x = Math.PI / 2;
+    lightGroup.add(ringMesh);
+
+    // SpotLight target lives in world space (always aims at origin)
+    const spotTarget = new THREE.Object3D();
+    spotTarget.position.set(0, 0, 0);
+    scene.add(spotTarget);
+
+    let activeLight = null;
+
+    function buildLight() {
+      if (activeLight) {
+        lightGroup.remove(activeLight);
+        activeLight.dispose && activeLight.dispose();
+        activeLight = null;
+      }
+      if (params.plType === "Spot") {
+        activeLight = new THREE.SpotLight(
+          new THREE.Color(params.plColor),
+          params.plIntensity,
+          0, 0.45, 0.3, 2
+        );
+        activeLight.target = spotTarget;
+      } else {
+        activeLight = new THREE.PointLight(
+          new THREE.Color(params.plColor),
+          params.plIntensity,
+          0, 2
+        );
+      }
+      lightGroup.add(activeLight);
+    }
+    buildLight();
+
+    function applyPointLight() {
+      if (!activeLight) return;
+      lightGroup.visible = params.plEnabled;
+      bulbMat.color.set(params.plColor);
+      bulbMat.opacity = params.plEnabled ? 1.0 : 0.2;
+      ringMat.color.set(params.plColor);
+      activeLight.color.set(params.plColor);
+      activeLight.intensity = params.plIntensity;
+    }
+
+    function updateBulbScale() {
+      const s = Math.max(sceneDim * 0.022, 1);
+      bulbMesh.scale.setScalar(s);
+      ringMesh.scale.setScalar(s);
+    }
+
+    function resetLightPosition() {
+      lightGroup.position.set(0, sceneDim * 0.45, 0);
+    }
+
+    // ---------- TransformControls ----------
+    const tc = new TransformControls(camera, renderer.domElement);
+    tc.setMode("translate");
+    tc.attach(lightGroup);
+    scene.add(tc);
+
+    // Disable orbit while dragging the light
+    tc.addEventListener("dragging-changed", (e) => {
+      controls.enabled = !e.value;
+    });
+
     // ---------- Loaders ----------
     const draco = new DRACOLoader().setDecoderPath("https://cdn.jsdelivr.net/npm/three@0.183.0/examples/jsm/libs/draco/");
     const ktx2 = new KTX2Loader().setTranscoderPath("https://cdn.jsdelivr.net/npm/three@0.183.0/examples/jsm/libs/basis/").detectSupport(renderer);
@@ -207,12 +295,11 @@
     let current = null;
     let lastFrame = null;
 
-    // ---------- Apply settings to the scene ----------
+    // ---------- Apply settings ----------
     function applyLights() {
       ambient.visible = params.ambientOn;
       ambient.intensity = params.ambientIntensity;
       ambient.color.set(params.ambientColor);
-
       sun.visible = params.sunOn;
       sun.intensity = params.sunIntensity;
       sun.color.set(params.sunColor);
@@ -226,12 +313,12 @@
       if (params.background === "Transparent") { scene.background = null; }
       else if (params.background === "Light") { scene.background = new THREE.Color(0xcfd4da); }
       else if (params.background === "Custom") { scene.background = new THREE.Color(params.bgColor); }
-      else { scene.background = new THREE.Color(0x111111); } // Dark
+      else { scene.background = new THREE.Color(0x111111); }
     }
     function applyToneMapping() {
       renderer.toneMapping = TONE[params.toneMapping] ?? THREE.ACESFilmicToneMapping;
       renderer.toneMappingExposure = params.exposure;
-      applyMaterials(); // materials must recompile when tone mapping changes
+      applyMaterials();
     }
     function applyMaterials() {
       if (!current) return;
@@ -253,7 +340,7 @@
     }
     function applyAll() {
       applyLights(); applyEnv(); applyBackground(); applyToneMapping();
-      applyGrid(); applyAutoRotate(); applyMaterials();
+      applyGrid(); applyAutoRotate(); applyMaterials(); applyPointLight();
     }
 
     // ---------- Loading ----------
@@ -275,6 +362,8 @@
       object.position.sub(center);
 
       const maxDim = Math.max(size.x, size.y, size.z) || 1;
+      sceneDim = maxDim;
+
       const fov = camera.fov * (Math.PI / 180);
       const dist = (maxDim / 2) / Math.tan(fov / 2) * 1.5;
 
@@ -285,6 +374,10 @@
       controls.target.set(0, 0, 0);
       controls.update();
       lastFrame = { pos: camera.position.clone(), near: camera.near, far: camera.far };
+
+      // Scale and reposition the light bulb to fit the new model
+      updateBulbScale();
+      resetLightPosition();
     }
 
     function clearCurrent() {
@@ -372,6 +465,16 @@
     fEnv.add(params, "envOn").name("Enabled (reflections)").onChange(() => { applyEnv(); persist(); });
     fEnv.add(params, "envIntensity", 0, 4, 0.05).name("Strength").onChange(() => { applyMaterials(); persist(); });
 
+    const fPL = gui.addFolder("Positional Light");
+    fPL.add(params, "plEnabled").name("Enabled").onChange(() => { applyPointLight(); persist(); });
+    fPL.add(params, "plType", ["Point", "Spot"]).name("Type").onChange(() => {
+      buildLight(); applyPointLight(); persist();
+    });
+    fPL.add(params, "plIntensity", 0, 30, 0.5).name("Intensity").onChange(() => { applyPointLight(); persist(); });
+    fPL.addColor(params, "plColor").name("Color").onChange(() => { applyPointLight(); persist(); });
+    fPL.add(params, "plShowGizmo").name("Show move gizmo").onChange((v) => { tc.visible = v; });
+    fPL.add({ reset: () => resetLightPosition() }, "reset").name("↺ Reset position");
+
     const fScene = gui.addFolder("Scene");
     fScene.add(params, "background", ["Dark", "Light", "Custom", "Transparent"]).name("Background").onChange(() => { applyBackground(); persist(); });
     fScene.addColor(params, "bgColor").name("Custom color").onChange(() => { if (params.background === "Custom") applyBackground(); persist(); });
@@ -384,10 +487,7 @@
 
     gui.add(actions, "resetSettings").name("⟲ Reset all settings");
 
-    // collapse the heavier folders by default to keep it tidy
     fSun.close(); fEnv.close(); fRender.close();
-
-    // sync GUI widgets with any persisted values loaded at start
     gui.controllersRecursive().forEach((c) => c.updateDisplay());
 
     // ---------- File input ----------
@@ -432,6 +532,7 @@
 
     // ---------- Boot ----------
     applyAll();
+    tc.visible = params.plShowGizmo;
     animate();
     loadFromURL(DEFAULT_MODEL, DEFAULT_MODEL.split("/").pop());
   </script>
