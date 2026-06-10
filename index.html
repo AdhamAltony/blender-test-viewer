@@ -49,7 +49,7 @@
     }
     #error.show { display: block; }
     input[type="file"] { display: none; }
-    .lil-gui { --width: 310px; z-index: 12; }
+    .lil-gui { --width: 320px; z-index: 12; }
   </style>
 </head>
 <body>
@@ -81,18 +81,18 @@
 
   <script type="module">
     import * as THREE from "three";
-    import { OrbitControls }  from "three/addons/controls/OrbitControls.js";
-    import { GLTFLoader }     from "three/addons/loaders/GLTFLoader.js";
-    import { DRACOLoader }    from "three/addons/loaders/DRACOLoader.js";
-    import { KTX2Loader }     from "three/addons/loaders/KTX2Loader.js";
-    import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
+    import { OrbitControls }   from "three/addons/controls/OrbitControls.js";
+    import { GLTFLoader }      from "three/addons/loaders/GLTFLoader.js";
+    import { DRACOLoader }     from "three/addons/loaders/DRACOLoader.js";
+    import { KTX2Loader }      from "three/addons/loaders/KTX2Loader.js";
+    import { MeshoptDecoder }  from "three/addons/libs/meshopt_decoder.module.js";
     import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-    import { ViewHelper }     from "three/addons/helpers/ViewHelper.js";
-    import { GUI }            from "three/addons/libs/lil-gui.module.min.js";
+    import { ViewHelper }      from "three/addons/helpers/ViewHelper.js";
+    import { GUI }             from "three/addons/libs/lil-gui.module.min.js";
 
     const DEFAULT_MODEL = "models/Hall_1_Cleaned_Test_2.glb";
     const SETTINGS_KEY  = "impressiv-viewer-settings-v2";
-    const LIGHTS_KEY    = "impressiv-viewer-lights-v3";
+    const LIGHTS_KEY    = "impressiv-viewer-lights-v4";
     const el = (id) => document.getElementById(id);
 
     // ── Settings ──────────────────────────────────────────────────────────────
@@ -124,15 +124,15 @@
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     el("app").appendChild(renderer.domElement);
 
-    const scene = new THREE.Scene();
+    const scene  = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 500000);
     camera.position.set(0, 500, 1000);
 
-    const pmrem = new THREE.PMREMGenerator(renderer);
+    const pmrem      = new THREE.PMREMGenerator(renderer);
     const envTexture = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.5);  scene.add(ambient);
-    const sun = new THREE.DirectionalLight(0xffffff, 1.5);  scene.add(sun);
+    const ambient = new THREE.AmbientLight(0xffffff, 0.5); scene.add(ambient);
+    const sun     = new THREE.DirectionalLight(0xffffff, 1.5); scene.add(sun);
 
     const grid = new THREE.GridHelper(10000, 200, 0x444444, 0x2a2a2a);
     grid.material.transparent = true; grid.material.opacity = 0.6;
@@ -143,27 +143,28 @@
 
     const viewHelper = new ViewHelper(camera, renderer.domElement);
 
-    // ── Light handle geometry ─────────────────────────────────────────────────
+    // ── Handle geometry ───────────────────────────────────────────────────────
     const BULB_GEO   = new THREE.SphereGeometry(1, 16, 16);
     const RING_GEO   = new THREE.TorusGeometry(1.4, 0.12, 8, 32);
     const TARGET_GEO = new THREE.OctahedronGeometry(1, 0);
 
     // ── Positional lights ─────────────────────────────────────────────────────
-    let sceneDim = 100;
-    const lights = [];
+    let sceneDim    = 100;
+    let bulbSizeMul = 0.010;
+    const lights    = [];
     let selectedLight = null;
 
-    // drag state
-    const raycaster   = new THREE.Raycaster();
-    const _plane      = new THREE.Plane();
-    const _hit        = new THREE.Vector3();
-    const _offset     = new THREE.Vector3();
-    const _norm       = new THREE.Vector3();
-    let   dragState   = null;   // { targetObj, startX, startY, active }
-    let   dragMode    = "camera"; // "camera" | "horizontal" | "vertical"
+    const bulbScale   = () => Math.max(sceneDim * bulbSizeMul, 0.3);
+    const targetScale = () => Math.max(sceneDim * bulbSizeMul * 0.7, 0.2);
 
-    const bulbScale   = () => Math.max(sceneDim * 0.010, 0.3);
-    const targetScale = () => Math.max(sceneDim * 0.007, 0.2);
+    // ── Drag state ────────────────────────────────────────────────────────────
+    const raycaster = new THREE.Raycaster();
+    const _plane    = new THREE.Plane();
+    const _hit      = new THREE.Vector3();
+    const _offset   = new THREE.Vector3();
+    const _norm     = new THREE.Vector3();
+    let   dragState = null;
+    let   dragMode  = "camera";
 
     function getMouse(e) {
       const rect = renderer.domElement.getBoundingClientRect();
@@ -177,21 +178,21 @@
       if (dragMode === "horizontal") {
         _plane.setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), targetObj.position);
       } else if (dragMode === "vertical") {
-        // Vertical plane facing camera (only Y will be used from intersections)
         _norm.copy(camera.position).sub(targetObj.position);
         _norm.y = 0; _norm.normalize();
         _plane.setFromNormalAndCoplanarPoint(_norm, targetObj.position);
       } else {
-        // Camera-facing plane — most intuitive
         _norm.copy(camera.position).sub(targetObj.position).normalize();
         _plane.setFromNormalAndCoplanarPoint(_norm, targetObj.position);
       }
     }
 
+    // ── Spawn / destroy ───────────────────────────────────────────────────────
     function spawnLight(type = "Point", hexColor = "#ffffff", intensity = 4, opts = {}) {
       const {
         distance = 0, castShadow = false, shadowMapSize = 1024,
-        angle = 0.45, penumbra = 0.3,
+        angle = 0.45, penumbra = 0.3, decay = 2,
+        shadowBias = -0.0005, shadowRadius = 1,
         position = null, targetPos = null, enabled = true,
       } = opts;
 
@@ -214,10 +215,10 @@
       ringMesh.scale.setScalar(s); ringMesh.rotation.x = Math.PI / 2;
       group.add(ringMesh);
 
-      let light, targetGroup = null, targetMesh = null, targetMat = null;
+      let light, targetGroup = null, targetMesh = null, targetMat = null, helper = null;
 
       if (type === "Spot") {
-        light = new THREE.SpotLight(new THREE.Color(hexColor), intensity, distance, angle, penumbra, 2);
+        light = new THREE.SpotLight(new THREE.Color(hexColor), intensity, distance, angle, penumbra, decay);
         targetGroup = new THREE.Group();
         targetGroup.position.fromArray(targetPos ?? [0, 0, 0]);
         targetMat  = new THREE.MeshBasicMaterial({ color: hexColor, transparent: true, opacity: 0.6, depthWrite: false, wireframe: true });
@@ -231,11 +232,18 @@
         light.shadow.camera.far  = sceneDim * 3;
         light.shadow.camera.fov  = angle * (180 / Math.PI) * 2;
         light.shadow.camera.updateProjectionMatrix();
+        light.shadow.bias   = shadowBias;
+        light.shadow.radius = shadowRadius;
+        helper = new THREE.SpotLightHelper(light);
+        helper.visible = false;
+        scene.add(helper);
       } else {
-        light = new THREE.PointLight(new THREE.Color(hexColor), intensity, distance, 2);
+        light = new THREE.PointLight(new THREE.Color(hexColor), intensity, distance, decay);
         light.shadow.mapSize.set(shadowMapSize, shadowMapSize);
         light.shadow.camera.near = 0.5;
         light.shadow.camera.far  = sceneDim * 3;
+        light.shadow.bias   = shadowBias;
+        light.shadow.radius = shadowRadius;
       }
 
       light.castShadow = castShadow;
@@ -243,7 +251,7 @@
       group.add(light);
       scene.add(group);
 
-      const entry = { group, bulbMesh, bulbMat, ringMesh, ringMat, light, type, targetGroup, targetMesh, targetMat };
+      const entry = { group, bulbMesh, bulbMat, ringMesh, ringMat, light, type, targetGroup, targetMesh, targetMat, helper };
       lights.push(entry);
       return entry;
     }
@@ -254,12 +262,31 @@
       if (i === -1) return;
       lights.splice(i, 1);
       if (entry.targetGroup) scene.remove(entry.targetGroup);
+      if (entry.helper)      scene.remove(entry.helper);
       scene.remove(entry.group);
       if (selectedLight === entry) {
         selectedLight = null;
         if (lights.length) selectLight(lights[lights.length - 1]);
         else syncSelGui();
       }
+      saveLights();
+    }
+
+    function duplicateLight(entry) {
+      if (!entry) return;
+      const l = entry.light;
+      const clone = spawnLight(entry.type, "#" + l.color.getHexString(), l.intensity, {
+        distance: l.distance, castShadow: l.castShadow,
+        shadowMapSize: l.shadow?.mapSize.x ?? 1024,
+        angle: entry.type === "Spot" ? l.angle : 0.45,
+        penumbra: entry.type === "Spot" ? l.penumbra : 0.3,
+        decay: l.decay, shadowBias: l.shadow?.bias ?? -0.0005,
+        shadowRadius: l.shadow?.radius ?? 1,
+        position: entry.group.position.toArray().map((v, i) => v + (i === 0 ? sceneDim * 0.05 : 0)),
+        targetPos: entry.targetGroup ? entry.targetGroup.position.toArray() : null,
+        enabled: l.visible,
+      });
+      selectLight(clone);
       saveLights();
     }
 
@@ -296,14 +323,12 @@
       const hits = raycaster.intersectObjects(meshes, false);
       if (!hits.length) return;
 
-      const idx = meshes.indexOf(hits[0].object);
+      const idx   = meshes.indexOf(hits[0].object);
       const found = pool[idx];
-
       selectLight(found.entry);
       buildDragPlane(found.obj);
       raycaster.ray.intersectPlane(_plane, _hit);
       _offset.copy(found.obj.position).sub(_hit);
-
       dragState = { targetObj: found.obj, startX: e.clientX, startY: e.clientY, active: false };
       controls.enabled = false;
       e.stopPropagation();
@@ -311,7 +336,6 @@
 
     renderer.domElement.addEventListener("pointermove", (e) => {
       if (!dragState) {
-        // Hover cursor
         raycaster.setFromCamera(getMouse(e), camera);
         const meshes = [
           ...lights.map(l => l.bulbMesh),
@@ -320,29 +344,26 @@
         renderer.domElement.style.cursor = raycaster.intersectObjects(meshes, false).length ? "grab" : "default";
         return;
       }
-
-      const dx = e.clientX - dragState.startX;
-      const dy = e.clientY - dragState.startY;
+      const dx = e.clientX - dragState.startX, dy = e.clientY - dragState.startY;
       if (!dragState.active && Math.sqrt(dx * dx + dy * dy) < 4) return;
       dragState.active = true;
       renderer.domElement.style.cursor = "grabbing";
-
       raycaster.setFromCamera(getMouse(e), camera);
       if (raycaster.ray.intersectPlane(_plane, _hit)) {
         if (dragMode === "vertical") {
-          // Only apply Y movement
           dragState.targetObj.position.y = _hit.y + _offset.y;
         } else {
           dragState.targetObj.position.copy(_hit).add(_offset);
         }
       }
+      syncPosGui();
     });
 
     renderer.domElement.addEventListener("pointerup", () => {
       if (dragState) {
         controls.enabled = true;
         renderer.domElement.style.cursor = "default";
-        if (dragState.active) saveLights();
+        if (dragState.active) { saveLights(); syncSelGui(); }
         dragState = null;
       }
     });
@@ -354,8 +375,11 @@
           type: e.type, color: "#" + e.light.color.getHexString(),
           intensity: e.light.intensity, position: e.group.position.toArray(),
           distance: e.light.distance, castShadow: e.light.castShadow,
-          shadowMapSize: e.light.shadow?.mapSize.x ?? 1024, enabled: e.light.visible,
-          angle: e.type === "Spot" ? e.light.angle    : undefined,
+          shadowMapSize: e.light.shadow?.mapSize.x ?? 1024,
+          decay: e.light.decay, shadowBias: e.light.shadow?.bias ?? -0.0005,
+          shadowRadius: e.light.shadow?.radius ?? 1,
+          enabled: e.light.visible,
+          angle:    e.type === "Spot" ? e.light.angle    : undefined,
           penumbra: e.type === "Spot" ? e.light.penumbra : undefined,
           targetPos: e.targetGroup ? e.targetGroup.position.toArray() : undefined,
         }))));
@@ -366,8 +390,9 @@
       data.forEach(d => spawnLight(d.type, d.color, d.intensity, {
         distance: d.distance ?? 0, castShadow: d.castShadow ?? false,
         shadowMapSize: d.shadowMapSize ?? 1024, angle: d.angle ?? 0.45,
-        penumbra: d.penumbra ?? 0.3, position: d.position,
-        targetPos: d.targetPos, enabled: d.enabled !== false,
+        penumbra: d.penumbra ?? 0.3, decay: d.decay ?? 2,
+        shadowBias: d.shadowBias ?? -0.0005, shadowRadius: d.shadowRadius ?? 1,
+        position: d.position, targetPos: d.targetPos, enabled: d.enabled !== false,
       }));
       if (lights.length) selectLight(lights[0]);
     }
@@ -397,7 +422,7 @@
         o.castShadow = o.receiveShadow = true;
         const mats = Array.isArray(o.material) ? o.material : [o.material];
         mats.forEach(m => {
-          if ("wireframe" in m) m.wireframe = params.wireframe;
+          if ("wireframe"       in m) m.wireframe       = params.wireframe;
           if ("envMapIntensity" in m) m.envMapIntensity = params.envIntensity;
           m.needsUpdate = true;
         });
@@ -418,7 +443,7 @@
     function showError(msg) { const e = el("error"); e.textContent = "⚠ " + msg; e.classList.add("show"); setTimeout(() => e.classList.remove("show"), 8000); }
 
     function frameObject(obj) {
-      const box = new THREE.Box3().setFromObject(obj);
+      const box    = new THREE.Box3().setFromObject(obj);
       const center = box.getCenter(new THREE.Vector3());
       const size   = box.getSize(new THREE.Vector3());
       obj.position.sub(center);
@@ -433,6 +458,11 @@
       lastFrame = { pos: camera.position.clone(), near: camera.near, far: camera.far };
       rescaleBulbs();
       lights.forEach(({ group }) => group.position.set(0, sceneDim * 0.45, 0));
+      // Update position slider range
+      const R = maxDim * 1.5;
+      [posCtrlX, posCtrlY, posCtrlZ, tgtCtrlX, tgtCtrlY, tgtCtrlZ].forEach(c => {
+        if (c) { c.min(-R).max(R); c.updateDisplay(); }
+      });
     }
 
     function clearCurrent() {
@@ -472,17 +502,20 @@
     // ── GUI ───────────────────────────────────────────────────────────────────
     const gui = new GUI({ title: "⚙ Settings" });
 
+    // Model & View
     const fModel = gui.addFolder("Model & View");
     fModel.add({ o: () => el("fileinput").click() }, "o").name("📂 Open a model…");
     fModel.add({ r: () => { if (lastFrame) { camera.position.copy(lastFrame.pos); camera.near = lastFrame.near; camera.far = lastFrame.far; camera.updateProjectionMatrix(); controls.target.set(0,0,0); controls.update(); } } }, "r").name("↺ Reset camera");
     fModel.add(params, "autoRotate").name("Auto-rotate").onChange(() => { applyAutoRotate(); saveSettings(); });
     fModel.add(params, "autoRotateSpeed", 0.1, 8, 0.1).name("Rotate speed").onChange(() => { applyAutoRotate(); saveSettings(); });
 
+    // Ambient
     const fAmb = gui.addFolder("Ambient Light");
     fAmb.add(params, "ambientOn").name("Enabled").onChange(() => { applyLights(); saveSettings(); });
     fAmb.add(params, "ambientIntensity", 0, 5, 0.05).name("Intensity").onChange(() => { applyLights(); saveSettings(); });
     fAmb.addColor(params, "ambientColor").name("Color").onChange(() => { applyLights(); saveSettings(); });
 
+    // Sun
     const fSun = gui.addFolder("Sun / Directional");
     fSun.add(params, "sunOn").name("Enabled").onChange(() => { applyLights(); saveSettings(); });
     fSun.add(params, "sunIntensity", 0, 10, 0.05).name("Intensity").onChange(() => { applyLights(); saveSettings(); });
@@ -491,49 +524,74 @@
     fSun.add(params, "sunY", -10, 10, 0.1).name("Direction Y").onChange(() => { applyLights(); saveSettings(); });
     fSun.add(params, "sunZ", -10, 10, 0.1).name("Direction Z").onChange(() => { applyLights(); saveSettings(); });
 
+    // Environment
     const fEnv = gui.addFolder("Environment (IBL)");
     fEnv.add(params, "envOn").name("Enabled").onChange(() => { applyEnv(); saveSettings(); });
     fEnv.add(params, "envIntensity", 0, 4, 0.05).name("Strength").onChange(() => { applyMaterials(); saveSettings(); });
 
-    // ── Positional Lights GUI ──
+    // ── Positional Lights ─────────────────────────────────────────────────────
     const fPL = gui.addFolder("Positional Lights");
+
+    // Global light management controls
+    const handleCtrl = { size: 1.0 };
+    fPL.add(handleCtrl, "size", 0.1, 5.0, 0.05).name("Handle size ×").onChange(v => {
+      bulbSizeMul = 0.010 * v; rescaleBulbs();
+    });
 
     const dragModes = { mode: "Camera plane" };
     fPL.add(dragModes, "mode", ["Camera plane", "Horizontal (XZ)", "Vertical (Y only)"])
       .name("Drag plane")
       .onChange(v => {
-        if (v === "Camera plane")        dragMode = "camera";
+        if (v === "Camera plane")         dragMode = "camera";
         else if (v === "Horizontal (XZ)") dragMode = "horizontal";
         else                              dragMode = "vertical";
       });
 
     const plA = {
-      addPoint: () => { selectLight(spawnLight("Point", sel.color, sel.intensity)); saveLights(); },
-      addSpot:  () => { selectLight(spawnLight("Spot",  sel.color, sel.intensity)); saveLights(); },
-      remove:   () => destroyLight(selectedLight),
-      clearAll: () => { while (lights.length) destroyLight(lights[0]); },
+      addPoint:  () => { selectLight(spawnLight("Point", sel.color, sel.intensity)); saveLights(); },
+      addSpot:   () => { selectLight(spawnLight("Spot",  sel.color, sel.intensity)); saveLights(); },
+      duplicate: () => duplicateLight(selectedLight),
+      remove:    () => destroyLight(selectedLight),
+      clearAll:  () => { while (lights.length) destroyLight(lights[0]); },
     };
     fPL.add(plA, "addPoint").name("＋ Add Point Light");
     fPL.add(plA, "addSpot").name("＋ Add Spot Light");
+    fPL.add(plA, "duplicate").name("⧉ Duplicate Selected");
     fPL.add(plA, "remove").name("✕ Remove Selected");
     fPL.add(plA, "clearAll").name("✕✕ Clear All Lights");
 
-    // Selected light mirror
-    const sel = { type: "—", enabled: true, color: "#ffffff", intensity: 4, distance: 0, castShadow: false, shadowMapSize: 1024, angleDeg: 25.8, penumbra: 0.3 };
-    const selCtrlList = [];
-    const spotOnlyCtrlList = [];
+    // ── Selected Light ────────────────────────────────────────────────────────
+    const sel = {
+      type: "—",
+      // state
+      enabled: true, color: "#ffffff", intensity: 4, distance: 0,
+      decay: 2, castShadow: false, shadowMapSize: 1024,
+      shadowBias: -0.0005, shadowRadius: 1,
+      // spot-only
+      angleDeg: 25.8, penumbra: 0.3, showHelper: false,
+      // position (live)
+      posX: 0, posY: 0, posZ: 0,
+      targetX: 0, targetY: 0, targetZ: 0,
+    };
+
+    const selCtrlList    = [];
+    const spotOnlyList   = [];
+
+    // References to position controllers so we can update range after model load
+    let posCtrlX = null, posCtrlY = null, posCtrlZ = null;
+    let tgtCtrlX = null, tgtCtrlY = null, tgtCtrlZ = null;
 
     const fSel = fPL.addFolder("Selected Light");
 
-    function addCtrl(c, spotOnly = false) {
+    function addC(c, spotOnly = false) {
       selCtrlList.push(c);
-      if (spotOnly) spotOnlyCtrlList.push(c);
+      if (spotOnly) spotOnlyList.push(c);
       return c;
     }
 
-    addCtrl(fSel.add(sel, "type").name("Type").disable());
+    addC(fSel.add(sel, "type").name("Label").disable());
 
-    addCtrl(fSel.add(sel, "enabled").name("Enabled").onChange(v => {
+    addC(fSel.add(sel, "enabled").name("Enabled").onChange(v => {
       if (!selectedLight) return;
       selectedLight.light.visible = v;
       selectedLight.bulbMat.opacity = v ? 1.0 : 0.15;
@@ -541,7 +599,7 @@
       saveLights();
     }));
 
-    addCtrl(fSel.addColor(sel, "color").name("Color").onChange(v => {
+    addC(fSel.addColor(sel, "color").name("Color").onChange(v => {
       if (!selectedLight) return;
       selectedLight.light.color.set(v);
       selectedLight.bulbMat.color.set(v);
@@ -550,19 +608,24 @@
       saveLights();
     }));
 
-    addCtrl(fSel.add(sel, "intensity", 0, 30, 0.1).name("Intensity").onChange(v => {
+    addC(fSel.add(sel, "intensity", 0, 50, 0.1).name("Intensity").onChange(v => {
       if (selectedLight) { selectedLight.light.intensity = v; saveLights(); }
     }));
 
-    addCtrl(fSel.add(sel, "distance", 0, 2000, 10).name("Distance (0 = ∞)").onChange(v => {
+    addC(fSel.add(sel, "distance", 0, 5000, 10).name("Distance (0 = ∞)").onChange(v => {
       if (selectedLight) { selectedLight.light.distance = v; saveLights(); }
     }));
 
-    addCtrl(fSel.add(sel, "castShadow").name("Cast shadows").onChange(v => {
+    addC(fSel.add(sel, "decay", { "None (constant)": 0, "Linear": 1, "Physical (×r²)": 2 }).name("Decay mode").onChange(v => {
+      if (selectedLight) { selectedLight.light.decay = Number(v); saveLights(); }
+    }));
+
+    // ── Shadows ───────────────────────────────────────────────────────────────
+    addC(fSel.add(sel, "castShadow").name("Cast shadows").onChange(v => {
       if (selectedLight) { selectedLight.light.castShadow = v; saveLights(); }
     }));
 
-    addCtrl(fSel.add(sel, "shadowMapSize", [512, 1024, 2048, 4096]).name("Shadow map size").onChange(v => {
+    addC(fSel.add(sel, "shadowMapSize", [512, 1024, 2048, 4096]).name("Shadow map size").onChange(v => {
       if (!selectedLight?.light?.shadow) return;
       const size = Number(v);
       selectedLight.light.shadow.mapSize.set(size, size);
@@ -571,50 +634,115 @@
       saveLights();
     }));
 
-    addCtrl(fSel.add(sel, "angleDeg", 1, 89, 0.5).name("Cone angle °").onChange(v => {
+    addC(fSel.add(sel, "shadowBias", -0.05, 0.05, 0.0001).name("Shadow bias").onChange(v => {
+      if (selectedLight?.light?.shadow) { selectedLight.light.shadow.bias = v; saveLights(); }
+    }));
+
+    addC(fSel.add(sel, "shadowRadius", 0, 16, 0.5).name("Shadow softness").onChange(v => {
+      if (selectedLight?.light?.shadow) { selectedLight.light.shadow.radius = v; saveLights(); }
+    }));
+
+    // ── Spot-only ─────────────────────────────────────────────────────────────
+    addC(fSel.add(sel, "angleDeg", 1, 89, 0.5).name("Cone angle °").onChange(v => {
       if (!selectedLight || selectedLight.type !== "Spot") return;
       const rad = v * Math.PI / 180;
       selectedLight.light.angle = rad;
       selectedLight.light.shadow.camera.fov = v * 2;
       selectedLight.light.shadow.camera.updateProjectionMatrix();
       selectedLight.light.shadow.needsUpdate = true;
+      if (selectedLight.helper) selectedLight.helper.update();
       saveLights();
     }), true);
 
-    addCtrl(fSel.add(sel, "penumbra", 0, 1, 0.01).name("Penumbra (softness)").onChange(v => {
-      if (selectedLight && selectedLight.type === "Spot") { selectedLight.light.penumbra = v; saveLights(); }
+    addC(fSel.add(sel, "penumbra", 0, 1, 0.01).name("Penumbra (edge softness)").onChange(v => {
+      if (selectedLight?.type === "Spot") { selectedLight.light.penumbra = v; saveLights(); }
     }), true);
 
-    addCtrl(fSel.add({
-      reset: () => { if (selectedLight) { selectedLight.group.position.set(0, sceneDim * 0.45, 0); saveLights(); } }
-    }, "reset").name("↺ Reset light position"));
+    addC(fSel.add(sel, "showHelper").name("Show cone helper").onChange(v => {
+      if (selectedLight?.helper) { selectedLight.helper.visible = v; if (v) selectedLight.helper.update(); }
+    }), true);
 
-    addCtrl(fSel.add({
-      reset: () => { if (selectedLight?.targetGroup) { selectedLight.targetGroup.position.set(0, 0, 0); saveLights(); } }
-    }, "reset").name("↺ Reset target position"), true);
+    // ── Position ──────────────────────────────────────────────────────────────
+    const fPos = fSel.addFolder("Light Position");
+    posCtrlX = fPos.add(sel, "posX", -1000, 1000, 1).name("X").onChange(v => {
+      if (selectedLight) { selectedLight.group.position.x = v; saveLights(); }
+    });
+    posCtrlY = fPos.add(sel, "posY", -1000, 1000, 1).name("Y").onChange(v => {
+      if (selectedLight) { selectedLight.group.position.y = v; saveLights(); }
+    });
+    posCtrlZ = fPos.add(sel, "posZ", -1000, 1000, 1).name("Z").onChange(v => {
+      if (selectedLight) { selectedLight.group.position.z = v; saveLights(); }
+    });
+    selCtrlList.push(posCtrlX, posCtrlY, posCtrlZ);
+
+    addC(fPos.add({ r: () => { if (selectedLight) { selectedLight.group.position.set(0, sceneDim * 0.45, 0); syncSelGui(); saveLights(); } } }, "r").name("↺ Reset position"));
+
+    // ── Spot: target position ─────────────────────────────────────────────────
+    const fTgt = fSel.addFolder("Target Position (Spot)");
+    tgtCtrlX = fTgt.add(sel, "targetX", -1000, 1000, 1).name("X").onChange(v => {
+      if (selectedLight?.targetGroup) { selectedLight.targetGroup.position.x = v; saveLights(); }
+    });
+    tgtCtrlY = fTgt.add(sel, "targetY", -1000, 1000, 1).name("Y").onChange(v => {
+      if (selectedLight?.targetGroup) { selectedLight.targetGroup.position.y = v; saveLights(); }
+    });
+    tgtCtrlZ = fTgt.add(sel, "targetZ", -1000, 1000, 1).name("Z").onChange(v => {
+      if (selectedLight?.targetGroup) { selectedLight.targetGroup.position.z = v; saveLights(); }
+    });
+    selCtrlList.push(tgtCtrlX, tgtCtrlY, tgtCtrlZ);
+    spotOnlyList.push(fTgt); // hide whole folder for point lights
+
+    addC(fTgt.add({ r: () => { if (selectedLight?.targetGroup) { selectedLight.targetGroup.position.set(0, 0, 0); syncSelGui(); saveLights(); } } }, "r").name("↺ Reset target"), true);
+
+    // ── syncSelGui / syncPosGui ───────────────────────────────────────────────
+    function syncPosGui() {
+      if (!selectedLight) return;
+      const p = selectedLight.group.position;
+      sel.posX = parseFloat(p.x.toFixed(1));
+      sel.posY = parseFloat(p.y.toFixed(1));
+      sel.posZ = parseFloat(p.z.toFixed(1));
+      posCtrlX.updateDisplay(); posCtrlY.updateDisplay(); posCtrlZ.updateDisplay();
+      if (selectedLight.targetGroup) {
+        const t = selectedLight.targetGroup.position;
+        sel.targetX = parseFloat(t.x.toFixed(1));
+        sel.targetY = parseFloat(t.y.toFixed(1));
+        sel.targetZ = parseFloat(t.z.toFixed(1));
+        tgtCtrlX.updateDisplay(); tgtCtrlY.updateDisplay(); tgtCtrlZ.updateDisplay();
+      }
+    }
 
     function syncSelGui() {
       if (selectedLight) {
-        const l = selectedLight.light;
-        sel.type          = selectedLight.type + " Light";
-        sel.enabled       = l.visible !== false;
-        sel.color         = "#" + l.color.getHexString();
-        sel.intensity     = l.intensity;
-        sel.distance      = l.distance;
-        sel.castShadow    = l.castShadow;
+        const l   = selectedLight.light;
+        const idx = lights.indexOf(selectedLight) + 1;
+        sel.type         = `Light ${idx} — ${selectedLight.type}`;
+        sel.enabled      = l.visible !== false;
+        sel.color        = "#" + l.color.getHexString();
+        sel.intensity    = l.intensity;
+        sel.distance     = l.distance;
+        sel.decay        = l.decay;
+        sel.castShadow   = l.castShadow;
         sel.shadowMapSize = l.shadow?.mapSize.x ?? 1024;
+        sel.shadowBias   = l.shadow?.bias   ?? -0.0005;
+        sel.shadowRadius = l.shadow?.radius ?? 1;
         if (selectedLight.type === "Spot") {
-          sel.angleDeg = parseFloat((l.angle * 180 / Math.PI).toFixed(1));
-          sel.penumbra = l.penumbra;
+          sel.angleDeg   = parseFloat((l.angle * 180 / Math.PI).toFixed(1));
+          sel.penumbra   = l.penumbra;
+          sel.showHelper = selectedLight.helper?.visible ?? false;
         }
       } else {
         sel.type = "— none selected —";
       }
-      selCtrlList.forEach(c => c.updateDisplay());
+      selCtrlList.forEach(c => c.updateDisplay?.());
+      syncPosGui();
+      // Show/hide spot-only controls
       const isSpot = selectedLight?.type === "Spot";
-      spotOnlyCtrlList.forEach(c => { c.domElement.style.display = isSpot ? "" : "none"; });
+      spotOnlyList.forEach(c => {
+        const el = c.domElement ?? c.$title?.parentElement;
+        if (el) el.style.display = isSpot ? "" : "none";
+      });
     }
 
+    // ── Scene settings ────────────────────────────────────────────────────────
     const fScene = gui.addFolder("Scene");
     fScene.add(params, "background", ["Dark", "Light", "Custom", "Transparent"]).name("Background").onChange(() => { applyBackground(); saveSettings(); });
     fScene.addColor(params, "bgColor").name("Custom color").onChange(() => { if (params.background === "Custom") applyBackground(); saveSettings(); });
@@ -625,10 +753,10 @@
     fRender.add(params, "toneMapping", Object.keys(TONE)).name("Tone mapping").onChange(() => { applyToneMapping(); saveSettings(); });
     fRender.add(params, "exposure", 0, 3, 0.01).name("Exposure").onChange(() => { renderer.toneMappingExposure = params.exposure; saveSettings(); });
 
-    gui.add({ r: () => { try { localStorage.removeItem(SETTINGS_KEY); localStorage.removeItem(LIGHTS_KEY); } catch(_){} location.reload(); } }, "r").name("⟲ Reset everything");
+    gui.add({ r: () => { try { localStorage.removeItem(SETTINGS_KEY); localStorage.removeItem(LIGHTS_KEY); } catch (_) {} location.reload(); } }, "r").name("⟲ Reset everything");
 
-    fSun.close(); fEnv.close(); fRender.close();
-    gui.controllersRecursive().forEach(c => c.updateDisplay());
+    fSun.close(); fEnv.close(); fRender.close(); fPos.close(); fTgt.close();
+    gui.controllersRecursive().forEach(c => c.updateDisplay?.());
 
     // ── File input / drag-drop ────────────────────────────────────────────────
     el("fileinput").addEventListener("change", e => { const f = e.target.files?.[0]; if (f) loadFromFile(f); e.target.value = ""; });
@@ -656,6 +784,7 @@
       const delta = clock.getDelta();
       if (viewHelper.animating) viewHelper.update(delta);
       controls.update();
+      lights.forEach(e => { if (e.helper?.visible) e.helper.update(); });
       renderer.clear();
       renderer.render(scene, camera);
       viewHelper.render(renderer);
